@@ -30,6 +30,9 @@ cd src
 python drq.py --seed=0 --save_dir="./drq_run_0/" --n_processes=20 \
   --simargs.rounds=20 --simargs.size=8000 --initial_opps="../human_warriors/imp.red" \
   --n_rounds=20 --n_iters=250 --gpt_model="gpt-4.1-mini-2025-04-14"
+
+# With OpenRouter or other OpenAI-compatible API:
+python drq.py --api_base_url="https://openrouter.ai/api/v1" --gpt_model="anthropic/claude-3.5-sonnet" ...
 ```
 
 ### Evaluate Warriors

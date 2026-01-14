@@ -52,6 +52,7 @@ class Args:
 
     # LLM arguments
     gpt_model: str = "gpt-4.1-mini-2025-04-14" # The GPT model to use
+    api_base_url: str | None = None # Base URL for OpenAI-compatible APIs (e.g. https://openrouter.ai/api/v1)
     temperature: float = 1.0
     system_prompt: str = os.path.expanduser("./prompts/system_prompt_0.txt")
     new_prompt: str = os.path.expanduser("./prompts/new_prompt_0.txt")
@@ -110,7 +111,8 @@ class Main:
             # task_crossover_warrior = f.read()
 
         self.corewar_gpt = CorewarGPT(args.gpt_model, system_prompt, new_warrior_prompt, mutate_warrior_prompt,
-                                      temperature=args.temperature, environment=simargs_to_environment(args.simargs))
+                                      temperature=args.temperature, environment=simargs_to_environment(args.simargs),
+                                      base_url=args.api_base_url)
 
         self.init_opps = []
         for file in args.initial_opps:

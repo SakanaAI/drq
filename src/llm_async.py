@@ -10,11 +10,11 @@ import backoff
 # MAX_NUM_TOKENS = 4096
 
 class GPT:
-    def __init__(self, model, system_prompt, temperature=1.):
+    def __init__(self, model, system_prompt, temperature=1., base_url=None):
         self.model = model
         self.system_prompt = system_prompt
         self.temperature = temperature
-        self.client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        self.client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=base_url)
 
     @backoff.on_exception(backoff.expo, (openai.RateLimitError, openai.APITimeoutError, openai.PermissionDeniedError))
     async def get_completion_async(self, prompt, n_responses=1):
