@@ -1,10 +1,10 @@
 # DRQ Janus Port Design
 
-Port Digital Red Queen to Janus idiomatics for bidirectional reasoning.
+Port Digital Red Queen to Janus, using state threading and backtracking for bidirectional reasoning.
 
 ## Overview
 
-Replace Python orchestration with Prolog. Keep Core War VM and LLM client in Python. Prolog controls evolution loop, strategy selection, and constraint inference. Python handles simulation and async I/O.
+Prolog replaces Python orchestration. Prolog controls the evolution loop, strategy selection, and constraint inference. Python retains the Core War VM, LLM client, simulation, and async I/O.
 
 ## Architectural Decisions
 
@@ -17,44 +17,45 @@ Replace Python orchestration with Prolog. Keep Core War VM and LLM client in Pyt
 
 ## System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     drq.pl (Entry Point)                    │
-│  • Evolution loop                                           │
-│  • Round/iteration control                                  │
-│  • Checkpoint coordination                                  │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ State threading
-┌─────────────────────────▼───────────────────────────────────┐
-│                    archive.pl (Pure State)                  │
-│  • MapElites as association list                            │
-│  • place/5, sample/3, get_best/3                            │
-│  • History as difference list                               │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│ strategy.pl   │ │ constraints.pl│ │ warrior.pl    │
-│ • select_     │ │ • infer_      │ │ • Term repr   │
-│   strategy/4  │ │   constraints │ │ • parse/      │
-│ • backtrack   │ │ • gap_analysis│ │   serialize   │
-│   on failure  │ │ • elite_      │ │ • validation  │
-└───────┬───────┘ │   patterns    │ └───────┬───────┘
-        │         └───────┬───────┘         │
-        └─────────────────┼─────────────────┘
-                          │ Janus boundary
-┌─────────────────────────▼───────────────────────────────────┐
-│                 Python Bridge Layer                         │
-├─────────────────┬─────────────────┬─────────────────────────┤
-│ llm_bridge.py   │ sim_bridge.py   │ stream_bridge.py        │
-│ • generate_     │ • run_battle    │ • start_evaluation      │
-│   with_hints    │ • parse_redcode │ • next_result           │
-│ • async OpenAI  │ • Core War VM   │ • ProcessPool manager   │
-└─────────────────┴─────────────────┴─────────────────────────┘
+```dot
+digraph DRQ_ARCHITECTURE {
+    rankdir=TB;
+    node [fontname="Helvetica", fontsize=10];
+
+    // Entry point (doublecircle)
+    drq [label="drq.pl\nEvolution loop\nRound control\nCheckpoint" shape=doublecircle];
+
+    // Pure state layer (box)
+    archive [label="archive.pl\nMapElites assoc\nplace/5, sample/3\nHistory diff list" shape=box];
+
+    // Logic modules (box)
+    strategy [label="strategy.pl\nselect_strategy/4\nbacktrack on fail" shape=box];
+    constraints [label="constraints.pl\ninfer_constraints/3\ngap_analysis\nelite_patterns" shape=box];
+    warrior [label="warrior.pl\nTerm repr\nparse/serialize\nvalidation" shape=box];
+
+    // Boundary (plaintext)
+    boundary [label="═══ Janus Boundary ═══" shape=plaintext];
+
+    // Python layer (box, filled)
+    llm_bridge [label="llm_bridge.py\ngenerate_with_hints\nasync OpenAI" shape=box style=filled fillcolor=lightgray];
+    sim_bridge [label="sim_bridge.py\nrun_battle\nparse_redcode" shape=box style=filled fillcolor=lightgray];
+    stream_bridge [label="stream_bridge.py\nstart_evaluation\nnext_result" shape=box style=filled fillcolor=lightgray];
+
+    // Edges
+    drq -> archive [label="threads state"];
+    archive -> strategy;
+    archive -> constraints;
+    archive -> warrior;
+    strategy -> boundary;
+    constraints -> boundary;
+    warrior -> boundary;
+    boundary -> llm_bridge [label="py_call/2"];
+    boundary -> sim_bridge [label="py_call/2"];
+    boundary -> stream_bridge [label="py_call/2"];
+}
 ```
 
-**Key invariant**: All state flows through Prolog predicates as explicit arguments. Python layer remains stateless.
+**Key invariant**: Prolog predicates thread all state as explicit arguments. The Python layer holds no state.
 
 ## Data Flow
 
@@ -67,8 +68,9 @@ evolve(Config, FinalState) :-
     evolve_rounds(Config, Opponents, 0, State0, FinalState).
 
 evolve_rounds(Config, _, Round, S, S) :-
-    Round >= Config.n_rounds, !.
+    Round >= Config.n_rounds.
 evolve_rounds(Config, Opponents, Round, S0, S) :-
+    Round < Config.n_rounds,
     run_round(Config, Opponents, Round, S0, S1),
     checkpoint(Config, Round, S1),
     get_best(Round, S1, Champion),
@@ -107,21 +109,24 @@ process_results(StreamId, Round, S0, S) :-
 
 ```prolog
 generate_warrior(Config, Round, S0, Warrior, S) :-
-    select_strategy(Config, Round, S0, Strategy),     % Choice point 1
+    select_strategy(Config, Round, S0, Strategy),
     infer_constraints(Strategy, S0, Constraints),
     attempt_generation(Config, Constraints, S0, Warrior, S1),
-    validate_warrior(Warrior, Constraints),           % Fails → backtrack
+    validate_warrior(Warrior, Constraints),
     record_generation(Warrior, S1, S).
 
-select_strategy(Config, Round, State, Strategy) :-
-    ( archive_has_gaps(Round, State, Gaps)
-    -> member(fill_gap(Gap), Gaps)              % Choice: try each gap
-    ; sample_elite(Round, State, Elite)
-    -> Strategy = mutate(Elite)
-    ; Strategy = generate_new
-    ).
+%% Strategy selection with explicit choice points
+select_strategy(_Config, Round, State, fill_gap(Gap)) :-
+    archive_has_gaps(Round, State, Gaps),
+    member(Gap, Gaps).
+select_strategy(_Config, Round, State, mutate(Elite)) :-
+    \+ archive_has_gaps(Round, State, _),
+    sample_elite(Round, State, Elite).
+select_strategy(_Config, Round, State, generate_new) :-
+    \+ archive_has_gaps(Round, State, _),
+    \+ sample_elite(Round, State, _).
 
-attempt_generation(Config, Constraints, S, Warrior, S1) :-
+attempt_generation(_Config, Constraints, S, Warrior, S1) :-
     constraints_to_hints(Constraints, Hints),
     py_call(llm_bridge:generate_with_hints(Hints), Response),
     parse_warrior_response(Response, Warrior, S, S1).
@@ -129,23 +134,39 @@ attempt_generation(Config, Constraints, S, Warrior, S1) :-
 
 ### State Threading
 
-```
-State0 ──┬── generate_warrior ──┬── attempt_generation ──┬── State1
-         │                      │                        │
-         │   [strategy choice]  │   [LLM call]           │
-         │         ↓            │        ↓               │
-         │   Backtrack if       │   Parse response       │
-         │   validate fails     │   Update history       │
-         │                      │                        │
-         └──────────────────────┴────────────────────────┘
-                    │
-                    ▼ (on success)
-State1 ──┬── place ──┬── State2
-         │           │
-         │  Archive  │
-         │  updated  │
-         │  if elite │
-         └───────────┘
+```dot
+digraph STATE_THREADING {
+    rankdir=LR;
+    node [fontname="Helvetica", fontsize=10];
+
+    // States (ellipse)
+    State0 [label="State0" shape=ellipse];
+    State1 [label="State1" shape=ellipse];
+    State2 [label="State2" shape=ellipse];
+    backtrack [label="Backtrack" shape=ellipse];
+
+    // Actions (box)
+    generate [label="Generate warrior" shape=box];
+    attempt [label="Attempt generation" shape=box];
+    parse [label="Parse response" shape=box];
+    record [label="Record generation" shape=box];
+    place [label="Place in archive" shape=box];
+
+    // Decisions (diamond)
+    validate [label="Valid?" shape=diamond];
+
+    // Flow
+    State0 -> generate;
+    generate -> attempt [label="strategy"];
+    attempt -> parse [label="LLM call"];
+    parse -> validate;
+    validate -> record [label="yes"];
+    validate -> backtrack [label="no"];
+    backtrack -> generate [style=dashed label="next strategy"];
+    record -> State1;
+    State1 -> place;
+    place -> State2 [label="if elite"];
+}
 ```
 
 ## Error Handling
@@ -168,18 +189,15 @@ generate_warrior(Config, Round, S0, Warrior, S) :-
     select_strategy(Config, Round, S0, Strategy),
     infer_constraints(Strategy, S0, Constraints),
     attempt_generation(Config, Constraints, S0, Warrior, S1),
-    (   validate_warrior(Warrior, Constraints)
-    ->  record_generation(Warrior, S1, S)
-    ;   record_failure(Strategy, validation_failed, S1, S2),
-        fail  % Backtrack to next strategy
-    ).
+    validate_warrior(Warrior, Constraints),
+    record_generation(Warrior, S1, S).
+%% Validation failure triggers backtracking to next strategy via select_strategy/4
 ```
 
 ### Retryable Errors (LLM/Network)
 
 ```prolog
-attempt_with_retry(_, 0, _, S, S) :-
-    !,
+attempt_with_retry(_, 0, _, _, _) :-
     throw(error(retry_exhausted, context(llm_generation, "Max retries exceeded"))).
 attempt_with_retry(Constraints, N, Response, S0, S) :-
     N > 0,
@@ -187,13 +205,17 @@ attempt_with_retry(Constraints, N, Response, S0, S) :-
     catch(
         py_call(llm_bridge:generate_with_hints(Hints), Response),
         PythonError,
-        (   classify_error(PythonError, retryable)
-        ->  N1 is N - 1,
-            record_retry(PythonError, S0, S1),
-            attempt_with_retry(Constraints, N1, Response, S1, S)
-        ;   throw(PythonError)
-        )
+        handle_python_error(PythonError, Constraints, N, Response, S0, S)
     ).
+
+handle_python_error(PythonError, Constraints, N, Response, S0, S) :-
+    classify_error(PythonError, retryable),
+    N1 is N - 1,
+    record_retry(PythonError, S0, S1),
+    attempt_with_retry(Constraints, N1, Response, S1, S).
+handle_python_error(PythonError, _, _, _, _, _) :-
+    classify_error(PythonError, fatal),
+    throw(PythonError).
 
 classify_error(py_error('RateLimitError', _), retryable).
 classify_error(py_error('APIConnectionError', _), retryable).
@@ -215,7 +237,7 @@ process_results(StreamId, Round, S0, S) :-
 handle_stream_error(Error, StreamId, Round, S0, S) :-
     py_call(stream_bridge:cancel(StreamId), _),
     record_stream_failure(Error, Round, S0, S1),
-    S = S1.  % Graceful degradation: keep partial results
+    S = S1.  % Degrade gracefully: retain partial results
 ```
 
 ## Testing
@@ -335,7 +357,7 @@ make test
 | strategy.pl | 90% | All choice points exercised |
 | constraints.pl | 95% | All constraint combinations |
 | Python bridges | 85% | Mock external services |
-| Integration | Key paths | Happy path + error recovery |
+| Integration | 80% | Happy path + error recovery |
 
 ## File Structure
 
@@ -370,6 +392,45 @@ drq/
 6. **Phase 6**: Implement `llm_bridge.py` with constraint-to-hints translation
 7. **Phase 7**: Wire up `drq.pl` entry point
 8. **Phase 8**: Integration testing and checkpoint compatibility
+
+## Janus Interop Conventions
+
+### Term Conversion
+
+Prolog terms crossing the Janus boundary follow these patterns:
+
+| Prolog Term | Python Type | Converter |
+|-------------|-------------|-----------|
+| `warrior(Id, Source, Meta)` | `dict` | `warrior_to_dict/2` |
+| `bc(TSP, MC)` | `tuple` | Direct unification |
+| `[Constraint|Cs]` | `list` | `constraints_to_hints/2` |
+| `py{key: Value}` | `dict` | Janus dict literal |
+
+### Async Interop
+
+Python async functions wrap in synchronous bridge functions using `asyncio.run()`. The streaming pattern uses an iterator interface:
+
+```python
+# stream_bridge.py
+def start_evaluation(warriors, opponents):
+    """Return stream ID; results via next_result()."""
+    stream = AsyncStream(warriors, opponents)
+    return register_stream(stream)
+
+def next_result(stream_id):
+    """Block until next result ready."""
+    return get_stream(stream_id).next()
+```
+
+### Python Exception Mapping
+
+Python exceptions appear in Prolog as `py_error(Type, Message)`:
+
+| Python Exception | Prolog Pattern |
+|-----------------|----------------|
+| `openai.RateLimitError` | `py_error('RateLimitError', _)` |
+| `openai.APIConnectionError` | `py_error('APIConnectionError', _)` |
+| `TimeoutError` | `py_error('Timeout', _)` |
 
 ## Dependencies
 
