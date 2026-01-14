@@ -48,13 +48,13 @@ class Core(object):
         return result
 
     def __getitem__(self, address):
+        if isinstance(address, slice):
+            start, stop = address.start, address.stop
+            if start > stop:
+                return self.instructions[start:] + self.instructions[:stop]
+            else:
+                return self.instructions[start:stop]
         return self.instructions[address % self.size]
-
-    def __getslice__(self, start, stop):
-        if start > stop:
-            return self.instructions[start:] + self.instructions[:stop]
-        else:
-            return self.instructions[start:stop]
 
     def __setitem__(self, address, instruction):
         self.instructions[address % self.size] = instruction
