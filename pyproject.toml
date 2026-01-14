@@ -1,0 +1,21 @@
+[project]
+name = "drq"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = [
+    "tyro==1.0.0",
+    "tqdm==4.67.1",
+    "openai==2.9.0",
+    "backoff==2.2.1",
+    "python-dotenv==1.2.1",
+    "numpy==2.1.0",
+    "psutil==7.1.0",
+    "pygame==2.6.1",
+    "corewar",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+corewar = { path = "corewar", editable = true }
