@@ -19,3 +19,9 @@ package = false
 
 [tool.uv.sources]
 corewar = { path = "corewar", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+]
